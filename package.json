@@ -1,0 +1,25 @@
+{
+    "name": "dail-operator-website",
+    "version": "1.0.0",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "@midscene/web": "^0.12.7",
+        "@nut-tree-fork/nut-js": "^4.2.6",
+        "@playwright/test": "^1.51.1",
+        "bcrypt": "^5.1.1",
+        "connect-mongo": "^5.1.0",
+        "dotenv": "^16.4.7",
+        "express": "^4.21.2",
+        "express-session": "^1.18.1",
+        "mongoose": "^6.13.8",
+        "openai": "^4.88.0",
+        "playwright": "^1.37.1",
+        "puppeteer": "^24.4.0",
+        "three": "^0.174.0"
+    },
+    "devDependencies": {
+        "vite": "^6.2.2"
+    }
+}

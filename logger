@@ -1,0 +1,47 @@
+// logger.js
+const fs = require('fs');
+const path = require('path');
+
+// Create logs directory if it doesn't exist
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir);
+}
+
+// Create a write stream for the log file
+const logStream = fs.createWriteStream(
+  path.join(logsDir, `app-${new Date().toISOString().split('T')[0]}.log`),
+  { flags: 'a' }
+);
+
+// Log levels
+const LOG_LEVELS = {
+  DEBUG: 0,
+  INFO: 1,
+  WARN: 2,
+  ERROR: 3,
+  FATAL: 4
+};
+
+const LOG_LEVEL = process.env.LOG_LEVEL || 'INFO';
+
+function formatMessage(level, message) {
+  const timestamp = new Date().toISOString();
+  return `[${timestamp}] [${level}] ${message}\n`;
+}
+
+function log(level, message) {
+  if (LOG_LEVELS[level] >= LOG_LEVELS[LOG_LEVEL]) {
+    const formattedMessage = formatMessage(level, message);
+    console.log(formattedMessage);
+    logStream.write(formattedMessage);
+  }
+}
+
+module.exports = {
+  debug: (message) => log('DEBUG', message),
+  info: (message) => log('INFO', message),
+  warn: (message) => log('WARN', message),
+  error: (message) => log('ERROR', message),
+  fatal: (message) => log('FATAL', message)
+};

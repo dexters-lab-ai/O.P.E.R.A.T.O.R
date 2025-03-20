@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings | O.P.E.R.A.T.O.R</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    :root {
+      --primary: #6e3eff;
+      --primary-dark: #5428e0;
+      --secondary: #00e5ff;
+      --dark: #0a0e17;
+      --dark-light: #181c28;
+      --text: #e0e0ff;
+      --text-muted: #a0a0b8;
+      --success: #00e676;
+      --danger: #ff3d71;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    body {
+      background: var(--dark);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      margin-bottom: 30px;
+    }
+
+    .logo h1 {
+      font-size: 24px;
+      font-weight: 700;
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    nav a {
+      margin-left: 20px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-weight: 500;
+      transition: all 0.2s;
+      font-size: 14px;
+    }
+
+    nav a:hover {
+      color: var(--text);
+    }
+
+    .btn {
+      padding: 12px 18px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .btn:hover {
+      background: var(--primary-dark);
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(94, 63, 255, 0.3);
+    }
+
+    .btn-sm {
+      padding: 8px 14px;
+      font-size: 13px;
+    }
+
+    .btn-danger {
+      background: var(--danger);
+    }
+
+    .btn-danger:hover {
+      background: color-mix(in srgb, var(--danger), black 10%);
+      box-shadow: 0 5px 15px rgba(255, 61, 113, 0.3);
+    }
+
+    .btn-icon {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card {
+      background: var(--dark-light);
+      border-radius: 12px;
+      padding: 25px;
+      margin-bottom: 25px;
+      box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+    }
+
+    .card-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 8px;
+      color: var(--text-muted);
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 10px;
+      background: var(--dark);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(110, 62, 255, 0.2);
+    }
+
+    .custom-url-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px;
+      background: var(--dark);
+      border-radius: 6px;
+      margin-bottom: 10px;
+    }
+
+    .custom-url-item span {
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    .custom-url-item button {
+      background: transparent;
+      border: none;
+      color: var(--danger);
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    .notification {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--success);
+      color: white;
+      padding: 15px 20px;
+      border-radius: 8px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 100;
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+    }
+
+    .notification.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">
+        <h1>O.P.E.R.A.T.O.R</h1>
+      </div>
+      <nav>
+        <a href="/"><i class="fas fa-home"></i> Home</a>
+        <a href="/history.html"><i class="fas fa-history"></i> History</a>
+        <a href="/guide.html"><i class="fas fa-book"></i> Guide</a>
+        <a href="/logout" class="btn btn-sm"><i class="fas fa-sign-out-alt"></i> Logout</a>
+      </nav>
+    </header>
+
+    <div class="card">
+      <h3 class="card-title"><i class="fas fa-cog"></i> Settings</h3>
+
+      <div class="form-group">
+        <h4>Clear History</h4>
+        <p style="color: var(--text-muted); margin-bottom: 10px;">Remove all past tasks from your history.</p>
+        <button id="clear-history" class="btn btn-danger btn-sm btn-icon"><i class="fas fa-trash"></i> Clear History</button>
+      </div>
+
+      <div class="form-group">
+        <h4>Custom URLs</h4>
+        <p style="color: var(--text-muted); margin-bottom: 10px;">Add default URLs that O.P.E.R.A.T.O.R can use for tasks.</p>
+        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+          <input type="url" id="custom-url-input" placeholder="Enter URL (e.g., https://example.com)">
+          <button id="add-custom-url" class="btn btn-sm btn-icon"><i class="fas fa-plus"></i> Add URL</button>
+        </div>
+        <div id="custom-url-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notification" id="notification">
+    <i class="fas fa-check-circle"></i>
+    <span id="notification-message">Settings updated successfully!</span>
+  </div>
+
+  <script>
+    function showNotification(message, type = 'success') {
+      const notification = document.getElementById('notification');
+      if (!notification) {
+        const notifDiv = document.createElement('div');
+        notifDiv.id = 'notification';
+        notifDiv.className = 'notification';
+        notifDiv.innerHTML = `<i class="fas fa-check-circle"></i> <span id="notification-message"></span>`;
+        document.body.appendChild(notifDiv);
+      }
+
+      const notificationElement = document.getElementById('notification');
+      const notificationMessage = document.getElementById('notification-message');
+      notificationElement.style.background = type === 'success' ? 'var(--success)' : 'var(--danger)';
+      notificationMessage.textContent = message;
+      notificationElement.classList.add('show');
+      setTimeout(() => { notificationElement.classList.remove('show'); }, 3000);
+    }
+
+    async function loadCustomUrls() {
+      try {
+        const response = await fetch('/custom-urls', { credentials: 'same-origin' });
+        if (!response.ok) throw new Error('Failed to load custom URLs');
+        const customUrls = await response.json();
+        const urlList = document.getElementById('custom-url-list');
+        urlList.innerHTML = '';
+        if (customUrls.length === 0) {
+          urlList.innerHTML = '<p style="color: var(--text-muted);">No custom URLs added yet.</p>';
+          return;
+        }
+        customUrls.forEach(url => {
+          const urlItem = document.createElement('div');
+          urlItem.className = 'custom-url-item';
+          urlItem.innerHTML = `
+            <span>${url}</span>
+            <button onclick="deleteCustomUrl('${url}')"><i class="fas fa-trash"></i></button>
+          `;
+          urlList.appendChild(urlItem);
+        });
+      } catch (error) {
+        showNotification('Error loading custom URLs', 'error');
+        console.error(error);
+      }
+    }
+
+    async function addCustomUrl() {
+      const url = document.getElementById('custom-url-input').value.trim();
+      if (!url) {
+        showNotification('Please enter a valid URL', 'error');
+        return;
+      }
+      try {
+        const response = await fetch('/custom-urls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ url })
+        });
+        if (!response.ok) throw new Error('Failed to add custom URL');
+        document.getElementById('custom-url-input').value = '';
+        loadCustomUrls();
+        showNotification('Custom URL added successfully!');
+      } catch (error) {
+        showNotification('Error adding custom URL', 'error');
+        console.error(error);
+      }
+    }
+
+    async function deleteCustomUrl(url) {
+      try {
+        const response = await fetch(`/custom-urls/${encodeURIComponent(url)}`, {
+          method: 'DELETE',
+          credentials: 'same-origin'
+        });
+        if (!response.ok) throw new Error('Failed to delete custom URL');
+        loadCustomUrls();
+        showNotification('Custom URL deleted successfully!');
+      } catch (error) {
+        showNotification('Error deleting custom URL', 'error');
+        console.error(error);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      loadCustomUrls();
+      document.getElementById('add-custom-url').addEventListener('click', addCustomUrl);
+      document.getElementById('clear-history').addEventListener('click', async () => {
+        try {
+          const response = await fetch('/history', {
+            method: 'DELETE',
+            credentials: 'same-origin'
+          });
+          if (!response.ok) throw new Error('Failed to clear history');
+          showNotification('History cleared successfully!');
+        } catch (error) {
+          showNotification('Error clearing history', 'error');
+          console.error(error);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
