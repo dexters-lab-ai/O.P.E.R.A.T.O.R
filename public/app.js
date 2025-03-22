@@ -254,6 +254,19 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+  /*
+  // Alternative implementation to use same path for results
+  nliForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const prompt = document.getElementById('nli-prompt').value.trim();
+    if (!prompt) {
+      showNotification('Please enter a command', 'error');
+      return;
+    }
+    // Should use executeTaskWithAnimation instead of direct fetch
+    await executeTaskWithAnimation(window.location.href, prompt, 'nli');
+  });
+  */
   
   // Manual Task – load via URL parameters if available
   const urlParams = new URLSearchParams(window.location.search);
@@ -332,25 +345,31 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
     const bridgeForm = document.getElementById('bridge-form');
-    if (bridgeForm) {
-      bridgeForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const url = document.getElementById('bridge-url').value.trim();
-        const command = document.getElementById('bridge-command').value.trim();
-        if (!command) { showNotification('Please enter bridge operation details', 'error'); return; }
-        executeTaskWithAnimation(url, command, 'sonic-bridge');
-      });
-    }
     const stakeForm = document.getElementById('stake-form');
-    if (stakeForm) {
-      stakeForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const url = document.getElementById('stake-url').value.trim();
-        const command = document.getElementById('stake-command').value.trim();
-        if (!command) { showNotification('Please enter staking details', 'error'); return; }
-        executeTaskWithAnimation(url, command, 'sonic-stake');
-      });
-    }
+    // Bridge form needs update
+    bridgeForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const url = document.getElementById('bridge-url').value.trim();
+      const command = document.getElementById('bridge-command').value.trim();
+      if (!command) { 
+        showNotification('Please enter bridge operation details', 'error'); 
+        return; 
+      }
+      executeTaskWithAnimation(url, command, 'sonic-bridge');
+    });
+
+    // Stake form needs update
+    stakeForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const url = document.getElementById('stake-url').value.trim();
+      const command = document.getElementById('stake-command').value.trim();
+      if (!command) { 
+        showNotification('Please enter staking details', 'error'); 
+        return; 
+      }
+      executeTaskWithAnimation(url, command, 'sonic-stake');
+    });
+
     const bridgeBtn = document.getElementById('bridge-btn');
     const stakeBtn = document.getElementById('stake-btn');
     if (bridgeBtn) {
@@ -386,21 +405,17 @@ document.addEventListener('DOMContentLoaded', () => {
       addRepetitiveTask(task);
       showNotification('Repetitive task saved and started!', 'success');
     });
+    // Run button needs update
     document.getElementById('run-repetitive-task').addEventListener('click', async () => {
       const url = document.getElementById('repetitive-url').value.trim();
       const command = document.getElementById('repetitive-command').value.trim();
-      if (!url || !command) { showNotification('Please enter both URL and command', 'error'); return; }
-      try {
-        showNotification(`Executing repetitive task: ${command}`, 'success');
-        const result = await executeTask(url, command);
-        result.taskType = 'repetitive';
-        addTaskResult(result);
-        addToHistory(url, command, result);
-      } catch (error) {
-        console.error('Error executing repetitive task:', error);
-        showNotification(`Task execution failed: ${error.message}`, 'error');
+      if (!url || !command) { 
+        showNotification('Please enter both URL and command', 'error'); 
+        return; 
       }
+      executeTaskWithAnimation(url, command, 'repetitive');
     });
+
     updateRepetitiveTasks();
   }
   
@@ -412,13 +427,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const url = document.getElementById('schedule-url').value.trim();
       const command = document.getElementById('scheduled-command').value.trim();
       const scheduledTime = document.getElementById('scheduled-time').value;
-      if (!url || !command || !scheduledTime) { showNotification('Please fill in all scheduled task fields', 'error'); return; }
+      if (!url || !command || !scheduledTime) { 
+        showNotification('Please fill in all scheduled task fields', 'error'); 
+        return; 
+      }
       const time = new Date(scheduledTime);
-      if (isNaN(time) || time <= new Date()) { showNotification('Please enter a valid future date and time', 'error'); return; }
+      if (isNaN(time) || time <= new Date()) { 
+        showNotification('Please enter a valid future date and time', 'error'); 
+        return; 
+      }
       const task = { id: Date.now(), url, command, scheduledTime: time.toISOString() };
       scheduleTask(task);
       showNotification(`Task scheduled for ${time.toLocaleString()}`, 'success');
     });
+
     updateScheduledTasksList();
     checkScheduledTasks();
   }
@@ -442,29 +464,40 @@ async function executeTaskWithAnimation(url, command, taskType) {
     showNotification("Please enter both URL and command", "error");
     return;
   }
+
   try {
     showNotification("Task started – please wait...", "success");
     isTaskRunning = true;
     sentinelState = 'tasking';
     sentinelCanvas.style.display = 'block';
     particles.visible = true;
+
     const result = await executeTask(url, command);
     result.taskType = taskType;
+
     addTaskResult(result);
     addToHistory(url, command, result);
-    showNotification("Task completed successfully!", "success");
+    updateActiveTasksTab();
     isTaskRunning = false;
     sentinelState = 'normal';
+
+    // Task completion is handled by handleTaskResult
+    showNotification("Task completed successfully!", "success");
   } catch (error) {
     console.error("Error executing task:", error);
     showNotification(`Task execution failed: ${error.message}`, "error");
+    
+    // Reset states
     isTaskRunning = false;
     sentinelState = 'normal';
-    // Fetch the latest history to ensure the error is reflected
+    
+    // Ensure UI is updated
+    await loadActiveTasks();
     await loadHistory();
   }
 }
 
+// Enhanced task execution
 async function executeTask(url, command) {
   return new Promise(async (resolve, reject) => {
     try {
@@ -474,58 +507,114 @@ async function executeTask(url, command) {
         credentials: 'same-origin',
         body: JSON.stringify({ url, command })
       });
+
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Task execution failed');
+      
       const taskId = data.taskId;
-
-      // Use the /tasks/:id/stream endpoint for real-time updates
       const eventSource = new EventSource(`/tasks/${taskId}/stream`);
-      eventSource.onmessage = (event) => {
+      
+      eventSource.onmessage = async (event) => {
         const update = JSON.parse(event.data);
+        
+        // Update progress
+        if (update.progress) {
+          updateTaskProgress(taskId, update.progress);
+        }
+
         if (update.done) {
           eventSource.close();
+          
           if (update.status === 'error') {
             reject(new Error(update.error || 'Task failed'));
             return;
           }
-          // Fetch the final result from history
-          fetch('/history', { credentials: 'same-origin' })
-            .then(res => res.json())
-            .then(history => {
-              const historyItem = history.find(h => h._id === taskId);
-              if (historyItem) {
-                resolve({
-                  taskId: historyItem._id,
-                  command,
-                  url,
-                  output: typeof historyItem.result === 'object'
-                    ? JSON.stringify(historyItem.result.raw || historyItem.result, null, 2)
-                    : historyItem.result,
-                  aiOutput: historyItem.result.aiPrepared?.summary || 'No AI summary available',
-                  timestamp: historyItem.timestamp,
-                  screenshot: historyItem.result.raw?.screenshotPath,
-                  report: historyItem.result.runReport
-                });
-              } else {
-                reject(new Error("Task result not found in history"));
-              }
-            })
-            .catch(err => {
-              reject(new Error("Error fetching task result: " + err.message));
-            });
+
+          // Fetch final result from history
+          const historyItem = await fetchHistoryItem(taskId);
+          if (!historyItem) {
+            reject(new Error("Task result not found in history"));
+            return;
+          }
+
+          // Structure the result
+          const result = {
+            taskId: historyItem._id,
+            command,
+            url,
+            output: typeof historyItem.result === 'object' 
+              ? JSON.stringify(historyItem.result.raw || historyItem.result, null, 2)
+              : historyItem.result,
+            aiOutput: historyItem.result.aiPrepared?.summary || 'No AI summary available',
+            timestamp: historyItem.timestamp,
+            screenshot: historyItem.result.raw?.screenshotPath,
+            report: historyItem.result.runReport,
+            status: update.status
+          };
+
+          // Handle task completion
+          const handled = await handleTaskResult(taskId, result);
+          if (!handled) {
+            reject(new Error("Failed to handle task result"));
+            return;
+          }
+
+          resolve(result);
         }
-        // Update active tasks UI with progress
-        loadActiveTasks();
       };
+
       eventSource.onerror = (err) => {
         eventSource.close();
         reject(new Error("Error streaming task updates"));
       };
     } catch (err) {
-      showNotification("Error executing task: " + err.message, "error");
       reject(err);
     }
   });
+}
+
+// Helper to fetch history item
+async function fetchHistoryItem(taskId) {
+  try {
+    const res = await fetch(`/history/${taskId}`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('Failed to fetch history item');
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    console.error('Error fetching history item:', err);
+    return null;
+  }
+}
+
+// Helper to handle task result
+async function handleTaskResult(taskId, result) {
+  try {
+    // Add to results section
+    addTaskResult(result);
+    
+    // Add to history
+    addToHistory(result.url, result.command, result);
+    
+    // Update active tasks
+    await loadActiveTasks();
+    
+    // Update UI state
+    sentinelState = 'normal';
+    isTaskRunning = false;
+    
+    return true;
+  } catch (err) {
+    console.error('Error handling task result:', err);
+    return false;
+  }
+}
+
+// Helper to update task progress in UI
+function updateTaskProgress(taskId, progress) {
+  const progressBar = document.querySelector(`[data-task-id="${taskId}"] .task-progress`);
+  if (progressBar) {
+    progressBar.style.width = `${progress}%`;
+  }
 }
 
 /******************** Task Results & History Functions ********************/
@@ -544,16 +633,22 @@ function addTaskResult(result) {
   const aiResults = document.getElementById('ai-results');
   const rawResults = document.getElementById('raw-results');
   const noResults = document.getElementById('no-results');
+  
   if (noResults) noResults.remove();
+  
   const timestamp = new Date(result.timestamp);
   const formattedTime = timestamp.toLocaleTimeString() + ' ' + timestamp.toLocaleDateString();
+  
+  // Determine task type icon
   let icon = 'fas fa-globe';
   if (result.taskType === 'sonic-bridge') icon = 'fas fa-exchange-alt';
   if (result.taskType === 'sonic-stake') icon = 'fas fa-lock';
   if (result.taskType === 'repetitive') icon = 'fas fa-redo';
   if (result.taskType === 'scheduled') icon = 'fas fa-clock';
+
+  // Create AI result card
   const aiCard = document.createElement('div');
-  aiCard.className = 'ai-result';
+  aiCard.className = 'ai-result animate-in';
   aiCard.innerHTML = `
     <h4><i class="${icon}"></i> ${result.url}</h4>
     <p class="command-text"><strong>Command:</strong> ${result.command}</p>
@@ -566,27 +661,35 @@ function addTaskResult(result) {
       </div>
     </div>
   `;
+
+  // Create raw result card
   const rawCard = document.createElement('div');
-  rawCard.className = 'output-card';
+  rawCard.className = 'output-card animate-in';
   rawCard.innerHTML = `
     <h4>Raw Output</h4>
     <pre>${result.output}</pre>
     ${result.screenshot ? `<img src="${result.screenshot}" alt="Task Screenshot" style="max-width: 100%; margin-top: 10px;">` : ''}
     ${result.report ? `<a href="${result.report}" target="_blank" class="btn btn-primary btn-sm mt-2">View Report</a>` : ''}
   `;
+
+  // Add cards to results sections
   aiResults.prepend(aiCard);
   rawResults.prepend(rawCard);
+
+  // Update UI state
   document.getElementById('sentinel-canvas').style.display = 'none';
   document.getElementById('output-container').style.display = 'block';
-  sentinelState = 'normal';
-  isTaskRunning = false;
+  
+  // Switch to AI results tab
   document.querySelectorAll('.result-tab').forEach(tab => tab.classList.remove('active'));
   document.querySelector('.result-tab[data-tab="ai"]').classList.add('active');
   document.getElementById('ai-results').classList.add('active');
   document.getElementById('raw-results').classList.remove('active');
+  
   showNotification('Task result added!', 'success');
 }
 
+// Enhanced loadActiveTasks function
 async function loadActiveTasks() {
   try {
     const response = await fetch('/tasks/active', { credentials: 'same-origin' });
@@ -630,40 +733,6 @@ function updateActiveTasksTab(){
       `<i class="fas fa-tasks"></i> Active Tasks (${activeTasks.length})`;
   } else {
     tab.innerHTML = '<i class="fas fa-tasks"></i> Active Tasks';
-  }
-}
-
-async function loadActiveTasks() {
-  try {
-    const response = await fetch('/tasks/active', { credentials: 'same-origin' });
-    if (!response.ok) {
-      if (response.status === 401) {
-        window.location.href = '/login.html';
-        return;
-      }
-      throw new Error(`Failed to load active tasks: ${response.statusText}`);
-    }
-
-    const tasks = await response.json();
-    activeTasks = tasks;
-    const tasksContainer = document.getElementById('active-tasks-container');
-
-    if (!tasks || tasks.length === 0) {
-      tasksContainer.innerHTML = '<p id="no-active-tasks" class="text-muted">No active tasks. Run a task to see it here.</p>';
-      updateActiveTasksTab();
-      return;
-    }
-
-    tasksContainer.innerHTML = '';
-    tasks.forEach(task => {
-      const taskElement = createTaskElement(task);
-      tasksContainer.appendChild(taskElement);
-    });
-
-    updateActiveTasksTab();
-  } catch (error) {
-    console.error('Error loading active tasks:', error);
-    showNotification('Failed to load active tasks. Please try again.', 'error');
   }
 }
 
@@ -907,44 +976,51 @@ function checkScheduledTasks() {
   updateScheduledTasksList();
 }
 
-
-// Manual Task (Fix 3, 10)
+// Manual Task Handler
 document.getElementById('run-manual-task').addEventListener('click', async () => {
   const url = document.getElementById('manual-url').value.trim();
   const command = document.getElementById('manual-command').value.trim();
+  
   if (!url || !command) {
     showNotification('Please enter both URL and command.', 'error');
     return;
   }
-  // Set loading state
-  isTaskRunning = true;
-  sentinelState = 'tasking';
-  document.getElementById('sentinel-canvas').style.display = 'block';
-  document.getElementById('output-container').innerHTML = ''; // clear previous results
-  try {
-    const res = await fetch('/automate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ url, command })
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error);
-    // Optionally, poll or listen for the result (your existing polling in loadActiveTasks should update the UI)
-    showNotification("Task submitted successfully!", "success");
-  } catch (error) {
-    showNotification(error.message, 'error');
-  } finally {
-    // Reset task animation state if needed.
-    isTaskRunning = false;
-    sentinelState = 'normal';
-  }
+
+  // Use executeTaskWithAnimation to ensure proper flow
+  await executeTaskWithAnimation(url, command, 'manual');
 });
 
 /******************** History Functions ********************/
+let isLoadingHistory = false;
+let historyLoadTimeout = null;
+const loadedHistoryIds = new Set();
+
 async function loadHistory() {
+  if (isLoadingHistory) return;
+  
   try {
-    const response = await fetch('/history', { credentials: 'same-origin' });
+    isLoadingHistory = true;
+    
+    const response = await fetch('/history', { 
+      credentials: 'same-origin',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    // Handle redirects and session timeouts
+    if (response.redirected) {
+      window.location.href = '/login.html';
+      return;
+    }
+
+    // Check content type
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      window.location.href = '/login.html';
+      return;
+    }
+
     if (!response.ok) {
       if (response.status === 401) {
         window.location.href = '/login.html';
@@ -952,107 +1028,219 @@ async function loadHistory() {
       }
       throw new Error(`Failed to load history: ${response.statusText}`);
     }
+
     const history = await response.json();
     const historyList = document.getElementById('history-list');
-    historyList.innerHTML = ''; // Clear existing history
+
+    // Only clear if we have new content to show
     if (history && history.length > 0) {
+      // Only show no-history message if there's no content
+      if (document.getElementById('no-history')) {
+        historyList.innerHTML = '';
+      }
+      
       history.forEach(item => {
-        addToHistory(item.url || 'Unknown URL', item.command, {
-          taskId: item._id,
-          command: item.command,
-          timestamp: item.timestamp,
-          output: typeof item.result === 'object' ? JSON.stringify(item.result.raw || item.result, null, 2) : item.result,
-          aiOutput: item.result.aiPrepared?.summary || 'No AI summary available',
-          screenshot: item.result.raw?.screenshotPath,
-          report: item.result.runReport
-        });
+        if (!item) return; // Skip invalid items
+        
+        if (!loadedHistoryIds.has(item._id)) {
+          addToHistory(
+            item.url || 'Unknown URL', 
+            item.command, 
+            {
+              taskId: item._id,
+              command: item.command,
+              timestamp: item.timestamp,
+              output: typeof item.result === 'object' 
+                ? JSON.stringify(item.result.raw || item.result, null, 2)
+                : item.result,
+              aiOutput: item.result?.aiPrepared?.summary || 'No AI summary available',
+              screenshot: item.result?.raw?.screenshotPath,
+              report: item.result?.runReport
+            }
+          );
+        }
       });
+
+      // Add click handlers
       document.querySelectorAll('#history-list .output-card').forEach(card => {
         card.removeEventListener('click', handleHistoryCardClick);
         card.addEventListener('click', handleHistoryCardClick);
       });
-    } else {
+    } else if (!document.getElementById('no-history')) {
       historyList.innerHTML = '<p id="no-history" class="text-muted">No task history. Run a task to start building your history.</p>';
     }
   } catch (error) {
     console.error('Error loading history:', error);
+    
+    // Check if error is due to session timeout
+    if (error.message.includes('<!DOCTYPE')) {
+      window.location.href = '/login.html';
+      return;
+    }
+
     showNotification('Error loading history. Please refresh or log in again.', 'error');
+  } finally {
+    isLoadingHistory = false;
+    
+    // Clear existing timeout
+    if (historyLoadTimeout) {
+      clearTimeout(historyLoadTimeout);
+    }
+    
+    // Set new timeout for next refresh
+    historyLoadTimeout = setTimeout(loadHistory, 5000);
   }
 }
 
-const loadedHistoryIds = new Set();
 function addToHistory(url, command, result) {
-  if (loadedHistoryIds.has(result.taskId)) return;
+  if (!result || !result.taskId || loadedHistoryIds.has(result.taskId)) return;
+  
   loadedHistoryIds.add(result.taskId);
   const historyList = document.getElementById('history-list');
-  if (document.getElementById('no-history')) {
-    document.getElementById('no-history').remove();
+  
+  // Remove no-history message if it exists
+  const noHistory = document.getElementById('no-history');
+  if (noHistory) {
+    noHistory.remove();
   }
+
   const historyItem = document.createElement('div');
-  historyItem.className = 'output-card';
+  historyItem.className = 'output-card animate-in';
   historyItem.dataset.taskId = result.taskId;
+  
   const timestamp = new Date(result.timestamp);
   const formattedTime = timestamp.toLocaleTimeString() + ' ' + timestamp.toLocaleDateString();
   const escapedCommand = command.replace(/'/g, "\\'");
+  
   historyItem.innerHTML = `
     <h4><i class="fas fa-history"></i> Task: ${command.length > 30 ? command.substring(0, 30) + '...' : command}</h4>
     <p>URL: ${url}</p>
     <div class="meta">
       <span>${formattedTime}</span>
       <div class="share-buttons">
-        <a href="#" onclick="event.stopPropagation(); rerunHistoryTask('${result.taskId}', '${url}', '${escapedCommand}')"><i class="fas fa-redo"></i></a>
-        <a href="#" onclick="event.stopPropagation(); deleteHistoryTask('${result.taskId}')"><i class="fas fa-trash"></i></a>
+        <a href="#" onclick="event.stopPropagation(); rerunHistoryTask('${result.taskId}', '${url}', '${escapedCommand}')">
+          <i class="fas fa-redo"></i>
+        </a>
+        <a href="#" onclick="event.stopPropagation(); deleteHistoryTask('${result.taskId}')">
+          <i class="fas fa-trash"></i>
+        </a>
       </div>
     </div>
   `;
-  historyItem.addEventListener('click', () => {
-    showHistoryPopup(result);
-  });
-  historyList.prepend(historyItem);
+
+  historyItem.addEventListener('click', handleHistoryCardClick);
+  historyList.insertBefore(historyItem, historyList.firstChild);
 }
 
 function handleHistoryCardClick(e) {
   if (e.target.tagName === 'A' || e.target.closest('a')) return;
+  
   const taskId = this.dataset.taskId;
   const popup = document.getElementById('history-popup');
   const details = document.getElementById('history-details-content');
+  
   fetch(`/history/${taskId}`, { credentials: 'same-origin' })
     .then(res => res.json())
     .then(item => {
       if (item) {
         const result = item.result || {};
+        const aiPrepared = result.aiPrepared || {};
+        const raw = result.raw || {};
+        
         details.innerHTML = `
-          <h5>Task: ${item.command}</h5>
+          <h4>Task Details</h4>
+          <p><strong>Command:</strong> ${item.command}</p>
           <p><strong>URL:</strong> ${item.url}</p>
           <p><strong>Timestamp:</strong> ${new Date(item.timestamp).toLocaleString()}</p>
-          <h5>AI-Prepared Output:</h5>
-          <pre>${result.aiPrepared?.summary || 'No AI-prepared summary available'}</pre>
-          <h5>Raw Output:</h5>
-          <pre>${result.raw?.pageText || 'No raw output available'}</pre>
-          ${result.runReport ? `<a href="${result.runReport}" target="_blank" class="btn btn-primary btn-sm">View Report</a>` : '<p>No report available</p>'}
+          
+          <h4>AI Summary</h4>
+          <div class="ai-result">
+            ${typeof aiPrepared.summary === 'string' 
+              ? aiPrepared.summary 
+              : JSON.stringify(aiPrepared.summary, null, 2)}
+          </div>
+          
+          ${aiPrepared.subtasks ? `
+            <h4>Subtasks</h4>
+            ${aiPrepared.subtasks.map((subtask, index) => `
+              <div class="ai-result">
+                <h5>Step ${index + 1}</h5>
+                <p>${subtask.summary}</p>
+                ${subtask.data ? `<pre>${JSON.stringify(subtask.data, null, 2)}</pre>` : ''}
+              </div>
+            `).join('')}
+          ` : ''}
+          
+          <h4>Raw Output</h4>
+          ${Array.isArray(raw) ? raw.map(r => `
+            ${r.screenshotPath ? `<img src="${r.screenshotPath}" alt="Task Screenshot">` : ''}
+            <pre>${r.pageText || 'No text content available'}</pre>
+          `).join('') : `
+            ${raw.screenshotPath ? `<img src="${raw.screenshotPath}" alt="Task Screenshot">` : ''}
+            <pre>${raw.pageText || 'No text content available'}</pre>
+          `}
+          
+          ${result.runReport ? `
+            <h4>Run Report</h4>
+            <a href="${result.runReport}" target="_blank" class="btn btn-primary btn-sm">View Full Report</a>
+          ` : ''}
         `;
+        
         popup.classList.add('active');
+        
+        // Add close button event listener
+        document.getElementById('close-history-popup').onclick = () => {
+          popup.classList.remove('active');
+        };
+        
+        // Close on background click
+        popup.onclick = (e) => {
+          if (e.target === popup) {
+            popup.classList.remove('active');
+          }
+        };
+        
+        // Close on escape key
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            popup.classList.remove('active');
+          }
+        });
+        
       } else {
-        details.innerHTML = '<p>History item not found</p>';
-        popup.classList.add('active');
+        showNotification('History item not found', 'error');
       }
     })
     .catch(err => {
       console.error('Error fetching history details:', err);
-      details.innerHTML = '<p>Error loading task details</p>';
-      popup.classList.add('active');
+      showNotification('Error loading task details', 'error');
     });
 }
 
+
 document.addEventListener('DOMContentLoaded', () => {
+  loadHistory();
+  
+  // Clear history button handler
   const clearHistoryButton = document.getElementById('clear-history');
   if (clearHistoryButton) {
     clearHistoryButton.addEventListener('click', async () => {
       try {
-        const res = await fetch('/history', { method: 'DELETE', credentials: 'same-origin' });
-        if (!res.ok) throw new Error('Failed to clear history');
-        document.getElementById('history-list').innerHTML = '<p id="no-history" class="text-muted">No task history. Run a task to start building your history.</p>';
-        showNotification('History cleared!');
+        const response = await fetch('/history', {
+          method: 'DELETE',
+          credentials: 'same-origin'
+        });
+        
+        if (!response.ok) throw new Error('Failed to clear history');
+        
+        // Clear loaded history IDs
+        loadedHistoryIds.clear();
+        
+        // Update UI
+        document.getElementById('history-list').innerHTML = 
+          '<p id="no-history" class="text-muted">No task history. Run a task to start building your history.</p>';
+        
+        showNotification('History cleared successfully!');
       } catch (error) {
         showNotification('Error clearing history', 'error');
         console.error(error);

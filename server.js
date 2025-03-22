@@ -1,21 +1,40 @@
-// server.js
-require('dotenv').config();
-const express = require('express');
+// server.js (ESM version)
+import dotenv from 'dotenv';
+dotenv.config();
+
+import express from 'express';
 const app = express();
-const bcrypt = require('bcrypt');
-const { ObjectId } = require('mongodb');
-const mongoose = require('mongoose');
-const session = require('express-session');
-const MongoStore = require('connect-mongo');
-const puppeteer = require('puppeteer');
-const { PuppeteerAgent } = require('@midscene/web/puppeteer');
-const path = require('path');
-const fs = require('fs');
-const { v4: uuidv4 } = require('uuid'); // For unique file names
-const OpenAI = require('openai');
+
+import bcrypt from 'bcrypt';
+import { ObjectId } from 'mongodb';
+import mongoose from 'mongoose';
+import session from 'express-session';
+import MongoStore from 'connect-mongo';
+import puppeteer from 'puppeteer';
+import { PuppeteerAgent } from '@midscene/web/puppeteer';
+import path from 'path';
+import fs from 'fs';
+import { v4 as uuidv4 } from 'uuid';
+import OpenAI from 'openai';
+
+import puppeteerExtra from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import winston from 'winston';
+import { RateLimiterMemory } from 'rate-limiter-flexible';
+import pRetry from 'p-retry';
+import pTimeout from 'p-timeout';
+
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Configure stealth plugin
+puppeteerExtra.use(StealthPlugin());
 
 // Use Nut.js instead of robotjs for desktop automation:
-const { keyboard, Key } = require('@nut-tree-fork/nut-js');
+import { keyboard, Key } from '@nut-tree-fork/nut-js';
 
 // Initialize the OpenAI client using new SDK syntax.
 const openai = new OpenAI({
@@ -58,6 +77,304 @@ app.use(session({
   })
 }));
 
+// Loggers & Utility
+// Configure Winston logger
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' })
+  ]
+});
+
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.simple()
+  }));
+}
+
+// Rate limiter setup
+const rateLimiter = new RateLimiterMemory({
+  points: 5, // Number of points
+  duration: 1, // Per second
+});
+
+// Browser pool management
+let browserPool = [];
+const MAX_POOL_SIZE = 3;
+
+async function getBrowser() {
+  try {
+    // Try to reuse an existing browser from the pool
+    let browser = browserPool.find(b => !b.inUse);
+    if (browser) {
+      browser.inUse = true;
+      return browser.instance;
+    }
+
+    // Create new browser if pool not full
+    if (browserPool.length < MAX_POOL_SIZE) {
+      const instance = await puppeteerExtra.launch({
+        headless: false,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--disable-extensions",
+          "--disable-accelerated-2d-canvas",
+          "--disable-3d-apis",
+          "--disable-notifications",
+          "--window-size=1080,768"
+        ],
+        defaultViewport: null,
+        ignoreHTTPSErrors: true
+      });
+      
+      browserPool.push({ instance, inUse: true });
+      return instance;
+    }
+
+    // Wait for available browser if pool is full
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    return getBrowser();
+  } catch (err) {
+    logger.error('Error getting browser:', err);
+    throw err;
+  }
+}
+
+function releaseBrowser(browser) {
+  const poolEntry = browserPool.find(b => b.instance === browser);
+  if (poolEntry) {
+    poolEntry.inUse = false;
+  }
+}
+
+// Enhanced page setup with retry logic
+async function setupPage(browser, url) {
+  const page = await browser.newPage();
+  
+  // Set up request interception
+  await page.setRequestInterception(true);
+  page.on('request', (request) => {
+    if (request.resourceType() === 'image' || request.resourceType() === 'font') {
+      request.abort();
+    } else {
+      request.continue();
+    }
+  });
+
+  // Enhanced error handling
+  page.on('error', err => {
+    logger.error('Page error:', err);
+  });
+
+  page.on('pageerror', err => {
+    logger.error('Page error:', err);
+  });
+
+  // Set headers and user agent
+  await page.setExtraHTTPHeaders({
+    'Accept-Language': 'en-US,en;q=0.9',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+  });
+
+  // Configure viewport
+  await page.setViewport({
+    width: 1080,
+    height: 768,
+    deviceScaleFactor: process.platform === "darwin" ? 2 : 1
+  });
+
+  // Set longer timeouts
+  page.setDefaultTimeout(60000);
+  page.setDefaultNavigationTimeout(60000);
+
+  // Navigate with retry logic
+  await pRetry(
+    async () => {
+      await pTimeout(
+        page.goto(url, { 
+          waitUntil: 'networkidle0',
+          timeout: 30000 
+        }),
+        30000,
+        'Navigation timeout'
+      );
+    },
+    {
+      retries: 3,
+      onFailedAttempt: error => {
+        logger.warn(
+          `Navigation attempt ${error.attemptNumber} failed. ${error.retriesLeft} retries left.`
+        );
+      }
+    }
+  );
+
+  return page;
+}
+
+// Enhanced waitForElement function
+async function waitForElement(page, selector, options = {}) {
+  const {
+    timeout = 10000,
+    visible = true,
+    retries = 3
+  } = options;
+
+  return pRetry(
+    async () => {
+      await page.waitForSelector(selector, { 
+        visible,
+        timeout 
+      });
+      return true;
+    },
+    {
+      retries,
+      onFailedAttempt: error => {
+        logger.warn(
+          `Wait attempt ${error.attemptNumber} failed for selector "${selector}". ${error.retriesLeft} retries left.`
+        );
+      }
+    }
+  );
+}
+
+// Enhanced click function with retry
+async function clickElement(page, selector, options = {}) {
+  const {
+    timeout = 5000,
+    retries = 3,
+    delay = 100
+  } = options;
+
+  return pRetry(
+    async () => {
+      await page.waitForSelector(selector, { 
+        visible: true,
+        timeout 
+      });
+      
+      // Wait a bit for any animations
+      await page.waitForTimeout(delay);
+      
+      // Try different click methods
+      try {
+        await page.click(selector);
+      } catch (err) {
+        // Try evaluate click if direct click fails
+        await page.evaluate((sel) => {
+          document.querySelector(sel).click();
+        }, selector);
+      }
+    },
+    {
+      retries,
+      onFailedAttempt: error => {
+        logger.warn(
+          `Click attempt ${error.attemptNumber} failed for selector "${selector}". ${error.retriesLeft} retries left.`
+        );
+      }
+    }
+  );
+}
+
+// --- Social login handling
+async function handleSocialLogin(page, provider) {
+  try {
+    // Wait for and click social login button
+    const buttonSelectors = {
+      google: '.google-login-button, [aria-label*="Google"]',
+      twitter: '.twitter-login-button, [aria-label*="Twitter"]',
+      facebook: '.facebook-login-button, [aria-label*="Facebook"]'
+    };
+
+    const selector = buttonSelectors[provider];
+    if (!selector) {
+      throw new Error(`Unsupported social login provider: ${provider}`);
+    }
+
+    // Wait for and click the social login button
+    await clickElement(page, selector, {
+      timeout: 10000,
+      retries: 3
+    });
+
+    // Handle popup if needed
+    const pages = await page.browser().pages();
+    const popup = pages[pages.length - 1];
+    
+    if (popup && popup !== page) {
+      // Switch to popup and handle login
+      await popup.waitForNavigation({ waitUntil: 'networkidle0' });
+      
+      // Wait for login form
+      await waitForElement(popup, 'input[type="email"]');
+      
+      // Let the calling code handle the actual login
+      return popup;
+    }
+
+    return page;
+  } catch (err) {
+    logger.error('Social login error:', err);
+    throw err;
+  }
+}
+
+async function executeTask(url, command) {
+  let browser;
+  try {
+    // Get browser from pool
+    browser = await getBrowser();
+    
+    // Set up page with retries
+    const page = await setupPage(browser, url);
+    
+    // Execute the task with rate limiting
+    await rateLimiter.consume('task');
+    
+    // Handle social login if needed
+    if (command.toLowerCase().includes('login') || command.toLowerCase().includes('sign in')) {
+      for (const provider of ['google', 'twitter', 'facebook']) {
+        if (command.toLowerCase().includes(provider)) {
+          const loginPage = await handleSocialLogin(page, provider);
+          // Let the AI handle the actual login flow
+          await agent.aiAction(command, loginPage);
+          break;
+        }
+      }
+    } else {
+      // Regular task execution
+      await agent.aiAction(command, page);
+    }
+    
+    // Get results
+    const screenshot = await page.screenshot({ encoding: 'base64' });
+    const pageText = await page.evaluate(() => document.body.innerText);
+    
+    return {
+      screenshot,
+      pageText,
+      success: true
+    };
+  } catch (err) {
+    logger.error('Task execution error:', err);
+    throw err;
+  } finally {
+    if (browser) {
+      releaseBrowser(browser);
+    }
+  }
+}
+
 // --- Authentication Middleware ---
 function requireAuth(req, res, next) {
   if (!req.session.user) {
@@ -66,7 +383,7 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Enhanced User Schema with subtasks and custom URLs
+// --- Enhanced User Schema with subtasks and custom URLs
 const userSchema = new mongoose.Schema({
   email: { type: String, unique: true },
   password: String,
@@ -103,7 +420,7 @@ const User = mongoose.model('User', userSchema);
 
 // --- Routes ---
 
-// Registration
+// --- Registration
 app.post('/register', async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -140,24 +457,71 @@ app.get('/logout', (req, res) => {
   });
 });
 
-// Get user history
+// Add this route to ensure proper content type headers
 app.get('/history', requireAuth, async (req, res) => {
   try {
+    // Set proper content type header
+    res.setHeader('Content-Type', 'application/json');
+    
     const user = await User.findById(req.session.user);
-    res.json(user.history);
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+    
+    // Sort history by timestamp in descending order
+    const sortedHistory = user.history.sort((a, b) => 
+      new Date(b.timestamp) - new Date(a.timestamp)
+    );
+
+    // Format history items with proper structure
+    const formattedHistory = sortedHistory.map(item => ({
+      _id: item._id,
+      url: item.url || 'Unknown URL',
+      command: item.command,
+      timestamp: item.timestamp,
+      result: {
+        raw: item.result?.raw || null,
+        aiPrepared: item.result?.aiPrepared || null,
+        runReport: item.result?.runReport || null
+      }
+    }));
+    
+    res.json(formattedHistory);
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('Error fetching history:', err);
+    res.status(500).json({ error: 'Failed to fetch history' });
   }
 });
 
+// History by id route
 app.get('/history/:id', requireAuth, async (req, res) => {
   try {
+    res.setHeader('Content-Type', 'application/json');
+    
     const user = await User.findById(req.session.user);
     const historyItem = user.history.find(h => h._id.toString() === req.params.id);
-    if (!historyItem) return res.status(404).json({ success: false, error: 'History item not found' });
-    res.json(historyItem);
+    
+    if (!historyItem) {
+      return res.status(404).json({ error: 'History item not found' });
+    }
+
+    // Format individual history item with same structure
+    const formattedItem = {
+      _id: historyItem._id,
+      url: historyItem.url || 'Unknown URL',
+      command: historyItem.command,
+      timestamp: historyItem.timestamp,
+      result: {
+        raw: historyItem.result?.raw || null,
+        aiPrepared: historyItem.result?.aiPrepared || null,
+        runReport: historyItem.result?.runReport || null
+      }
+    };
+    
+    res.json(formattedItem);
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('Error fetching history item:', err);
+    res.status(500).json({ error: 'Failed to fetch history item' });
   }
 });
 
@@ -438,7 +802,6 @@ async function runAutomation(userInstruction) {
     { role: "user", content: userInstruction }
   ];
   while (true) {
-    // Updated OpenAI call syntax:
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: messages,
@@ -446,8 +809,12 @@ async function runAutomation(userInstruction) {
       function_call: "auto"
     });
     
-    // Define 'reply' from the API response
-    const reply = response.data.choices[0].message;
+    // Use response.data if it exists; otherwise, use response directly.
+    const resultData = response.data || response;
+    if (!resultData.choices || !resultData.choices.length) {
+      throw new Error("No choices returned from OpenAI");
+    }
+    const reply = resultData.choices[0].message;
     if (reply.function_call) {
       const funcName = reply.function_call.name;
       const args = reply.function_call.arguments ? JSON.parse(reply.function_call.arguments) : {};
@@ -460,7 +827,9 @@ async function runAutomation(userInstruction) {
             break;
           case "click_element":
             await ensureElementVisible(args.query);
-            await page.click(args.query);
+            if (await waitForElement(page, '.login-button')) {
+              await page.click('.login-button');
+            }
             funcResult = { result: `Clicked element "${args.query}"` };
             break;
           case "input_text":
@@ -634,7 +1003,7 @@ app.post('/automate', requireAuth, async (req, res) => {
           const subtaskFullResult = {
             raw: { screenshotPath: `/midscene_run/${runId}/subtask-${i + 1}.png`, pageText: subtaskPageText },
             aiPrepared: parsedSubtaskResult,
-            runReport: `/midscene_run/${runId}/report.html` // Updated to match old implementation
+            runReport: `/midscene_run/${runId}/report.html`
           };
           await addIntermediateResult(req.session.user, taskId, subtaskFullResult);
           finalResults.push(subtaskFullResult);
@@ -673,7 +1042,6 @@ app.post('/automate', requireAuth, async (req, res) => {
         hasError = true;
       }
 
-      // Ensure report path consistency
       const reportPath = path.join(runDir, 'report.html');
       if (!fs.existsSync(reportPath)) {
         fs.writeFileSync(reportPath, `<html><body><h1>Midscene Run Report</h1><p>Task ID: ${taskId}</p><p>Command: ${command}</p></body></html>`);
@@ -744,19 +1112,19 @@ app.post('/automate', requireAuth, async (req, res) => {
         };
       } catch (actionError) {
         console.error("[Midscene] Error in simple task execution:", actionError);
-          console.log("[Midscene] Converting to complex task and retrying...");
-          await User.updateOne(
-            { _id: req.session.user, 'activeTasks._id': taskId },
-            { $set: { 'activeTasks.$.isComplex': true, 'activeTasks.$.subTasks': splitIntoSubTasks(command) } }
-          );
-          await updateTaskStatus(req.session.user, taskId, 'processing', 40);
-          if (browser) {
-            await browser.close();
-            browser = null;
-          }
-          const automateComplexTask = require('./automateComplexTask');
-          await automateComplexTask(req.session.user, taskId, url, command);
-          return; // Exit after delegating to automateComplexTask
+        console.log("[Midscene] Converting to complex task and retrying...");
+        await User.updateOne(
+          { _id: req.session.user, 'activeTasks._id': taskId },
+          { $set: { 'activeTasks.$.isComplex': true, 'activeTasks.$.subTasks': splitIntoSubTasks(command) } }
+        );
+        await updateTaskStatus(req.session.user, taskId, 'processing', 40);
+        if (browser) {
+          await browser.close();
+          browser = null;
+        }
+        const automateComplexTask = require('./automateComplexTask');
+        await automateComplexTask(req.session.user, taskId, url, command);
+        return;
       }
 
       await User.updateOne(
@@ -788,7 +1156,7 @@ app.post('/automate', requireAuth, async (req, res) => {
   }
 });
 
-module.exports = async function automateComplexTask(userId, taskId, url, command) {
+export default async function automateComplexTask(userId, taskId, url, command) {
   const User = mongoose.model('User');
   let browser;
   try {
@@ -800,15 +1168,46 @@ module.exports = async function automateComplexTask(userId, taskId, url, command
 
     console.log(`[ComplexTask] Starting complex task for user ${userId}, task ${taskId}`);
 
+    // Launch browser
     browser = await puppeteer.launch({
       headless: false,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--window-size=1080,768"],
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-extensions", 
+        "--disable-accelerated-2d-canvas",
+        "--disable-3d-apis",
+        "--disable-notifications",
+        "--window-size=1080,768"
+      ],
+      defaultViewport: null,
+      ignoreHTTPSErrors: true,
       timeout: 120000
     });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1080, height: 768, deviceScaleFactor: process.platform === "darwin" ? 2 : 1 });
-    page.setDefaultTimeout(300000);
-    page.setDefaultNavigationTimeout(180000);
+
+    // Create incognito context with enhanced security
+    const context = await browser.createIncognitoBrowserContext();
+    const page = await context.newPage();
+
+    // Set headers and user agent for better site compatibility
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    });
+
+    // Configure viewport
+    await page.setViewport({ 
+      width: 1080, 
+      height: 768, 
+      deviceScaleFactor: process.platform === "darwin" ? 2 : 1 
+    });
+
+    // Set longer timeouts for stability
+    page.setDefaultTimeout(600000);
+    page.setDefaultNavigationTimeout(300000);
+
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 180000 });
     await sleep(4000);
     await page.evaluate(() => new Promise(resolve => {
@@ -831,7 +1230,7 @@ module.exports = async function automateComplexTask(userId, taskId, url, command
         const overallProgress = Math.floor(30 + ((i / task.subTasks.length) * 60));
         task.progress = overallProgress;
         await user.save();
-        await page.waitForTimeout(10000);
+        await page.waitForNetworkIdle({ waitUntil: 'networkidle0', timeout: 10000 });
         await page.evaluate(() => new Promise(resolve => {
           if (document.readyState === 'complete') resolve();
           else window.addEventListener('load', resolve);
@@ -956,6 +1355,7 @@ module.exports = async function automateComplexTask(userId, taskId, url, command
   } finally {
     if (browser) {
       try {
+        if (context) await context.close();
         await browser.close();
       } catch (closeErr) {
         console.error("[ComplexTask] Error closing browser:", closeErr);
