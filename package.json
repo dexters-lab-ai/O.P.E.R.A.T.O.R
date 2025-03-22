@@ -1,6 +1,7 @@
 {
     "name": "dail-operator-website",
     "version": "1.0.0",
+    "type": "module",
     "scripts": {
         "start": "node server.js"
     },
@@ -15,9 +16,15 @@
         "express-session": "^1.18.1",
         "mongoose": "^6.13.8",
         "openai": "^4.88.0",
+        "p-retry": "^6.1.0",
+        "p-timeout": "^6.1.2",
         "playwright": "^1.37.1",
         "puppeteer": "^24.4.0",
-        "three": "^0.174.0"
+        "puppeteer-extra": "^3.3.6",
+        "puppeteer-extra-plugin-stealth": "^2.11.2",
+        "rate-limiter-flexible": "^5.0.0",
+        "three": "^0.174.0",
+        "winston": "^3.11.0"
     },
     "devDependencies": {
         "vite": "^6.2.2"

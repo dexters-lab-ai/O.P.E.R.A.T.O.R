@@ -315,6 +315,7 @@
           throw new Error(`Failed to load history: ${response.statusText}`);
         }
         const history = await response.json();
+        console.log('Full raw result:', history);
         const historyList = document.getElementById('history-list');
         if (history && history.length > 0) {
           const noHistory = document.getElementById('no-history');
@@ -327,6 +328,7 @@
             const timestamp = new Date(item.timestamp);
             const formattedTime = timestamp.toLocaleTimeString() + ' ' + timestamp.toLocaleDateString();
             const escapedCommand = item.command.replace(/'/g, "\\'");
+            
             historyItem.innerHTML = `
               <h4><i class="fas fa-history"></i> Task: ${item.command.length > 30 ? item.command.substring(0, 30) + '...' : item.command}</h4>
               <p>URL: ${item.url}</p>
@@ -339,21 +341,44 @@
               </div>
               <div class="details-section" id="details-${item._id}">
                 <h5>AI-Processed Results</h5>
-                ${item.result.aiPrepared.summary ? `
-                  <p><strong>Summary:</strong> ${item.result.aiPrepared.summary.summary || 'No summary available'}</p>
-                  ${item.result.aiPrepared.subtasks ? item.result.aiPrepared.subtasks.map(subtask => `
-                    <p><strong>Step ${subtask.step}:</strong> ${subtask.summary}</p>
-                    ${subtask.data ? `<pre>${JSON.stringify(subtask.data, null, 2)}</pre>` : ''}
-                  `).join('') : ''}
-                ` : '<p>No AI-processed results available.</p>'}
+                ${
+                  item.result.aiPrepared && item.result.aiPrepared.summary
+                    ? `
+                      <p><strong>Summary:</strong> ${item.result.aiPrepared.summary.summary || 'No summary available'}</p>
+                      ${
+                        // If subtasks are stored within the summary, print them as JSON.
+                        item.result.aiPrepared.summary.subtasks
+                          ? `<h6>Sub Tasks:</h6><pre>${JSON.stringify(item.result.aiPrepared.summary.subtasks, null, 2)}</pre>`
+                          : ''
+                      }
+                    `
+                    : '<p>No AI-processed results available.</p>'
+                }
                 <h5>Raw Results</h5>
-                ${item.result.raw ? (Array.isArray(item.result.raw) ? item.result.raw.map(raw => `
-                  <img src="${raw.screenshotPath}" alt="Screenshot">
-                  <pre>${raw.pageText}</pre>
-                `).join('') : `
-                  <img src="${item.result.raw.screenshotPath}" alt="Screenshot">
-                  <pre>${item.result.raw.pageText}</pre>
-                `) : '<p>No raw results available.</p>'}
+                ${
+                  (item.result.raw && item.result.raw.length > 0)
+                    ? (
+                        Array.isArray(item.result.raw)
+                          ? item.result.raw.map(raw => {
+                              const content = typeof raw === 'object'
+                                ? JSON.stringify(raw, null, 2)
+                                : raw;
+                              return raw.screenshotPath
+                                ? `<img src="${raw.screenshotPath}" alt="Screenshot"><pre>${content}</pre>`
+                                : `<pre>${content}</pre>`;
+                            }).join('')
+                          : (
+                              typeof item.result.raw === 'object'
+                              ? (item.result.raw.screenshotPath
+                                    ? `<img src="${item.result.raw.screenshotPath}" alt="Screenshot"><pre>${JSON.stringify(item.result.raw, null, 2)}</pre>`
+                                    : `<pre>${JSON.stringify(item.result.raw, null, 2)}</pre>`)
+                              : `<pre>${item.result.raw}</pre>`
+                            )
+                      )
+                    : `<p><em>Raw results empty.</em></p>
+                      <h5>Full Result Object</h5>
+                      <pre>${JSON.stringify(item.result, null, 2)}</pre>`
+                }
                 <h5>Run Report</h5>
                 ${item.result.runReport ? `<a href="${item.result.runReport}" target="_blank">View Midscene Run Report</a>` : '<p>No run report available.</p>'}
               </div>
