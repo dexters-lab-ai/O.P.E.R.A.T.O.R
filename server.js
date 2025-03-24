@@ -6,11 +6,9 @@ import express from 'express';
 const app = express();
 
 import bcrypt from 'bcrypt';
-import { ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
 import session from 'express-session';
 import MongoStore from 'connect-mongo';
-import puppeteer from 'puppeteer';
 import { PuppeteerAgent } from '@midscene/web/puppeteer';
 import path from 'path';
 import fs from 'fs';
@@ -18,18 +16,14 @@ import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
 
 import puppeteerExtra from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import RecaptchaPlugin from 'puppeteer-extra-plugin-recaptcha';
-import AdblockerPlugin from 'puppeteer-extra-plugin-adblocker';
-import winston from 'winston';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import pRetry from 'p-retry';
 import pTimeout from 'p-timeout';
+import clipboardy from 'clipboardy';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { exec } from 'child_process';
-import sharp from 'sharp';
 
 // Advanced control with Nut.js (improved version 22/03/2025 1:17pm)
 import nutJs from '@nut-tree-fork/nut-js';
@@ -44,21 +38,40 @@ import Mic from 'mic';
 import textToSpeech from '@google-cloud/text-to-speech';
 import speech from '@google-cloud/speech';
 
-// Clipboard operations
-import clipboardy from 'clipboardy';
+// Import NLI Router and Quark components
+import { QuarkAgent } from './src/quark/index.js';
+import { findElementSmart, retryAction } from './src/quark/utils.js';
+import NLIRouter from './src/nli/index.js';
+import logger from './src/utils/logger.js';
+
+// Initialize NLI Router and Quark agent
+let nliRouter;
+let quarkAgent;
+
+// Initialize components on server start
+async function initializeComponents() {
+  try {
+    nliRouter = new NLIRouter();
+    await nliRouter.initialize();
+    logger.info('NLI Router initialized successfully');
+
+    quarkAgent = new QuarkAgent();
+    await quarkAgent.initialize();
+    logger.info('Quark agent initialized successfully');
+  } catch (error) {
+    logger.error('Failed to initialize components:', error);
+    throw error;
+  }
+}
+
+// Initialize on server start
+initializeComponents().catch(err => {
+  console.error('Failed to initialize components:', err);
+  process.exit(1);
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-// Configure advanced puppeteer plugins
-puppeteerExtra.use(StealthPlugin());
-puppeteerExtra.use(AdblockerPlugin({ blockTrackers: true }));
-puppeteerExtra.use(
-  RecaptchaPlugin({
-    provider: { id: '2captcha', token: process.env.CAPTCHA_TOKEN || '' },
-    visualFeedback: true
-  })
-);
 
 // Configure Nut.js for advanced control
 keyboard.config.autoDelayMs = 100;
@@ -105,26 +118,6 @@ app.use(session({
   }),
   cookie: { maxAge: 7 * 24 * 60 * 60 * 1000, secure: process.env.NODE_ENV === 'production' }
 }));
-
-// Loggers & Utility
-// Configure Winston logger
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' })
-  ]
-});
-
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.simple()
-  }));
-}
 
 // Rate limiter setup
 const rateLimiter = new RateLimiterMemory({
@@ -1883,7 +1876,7 @@ async function launchApplication(appName) {
 // (Truncate unchanged endpoints like /register, /login, /logout, /history, /tasks, etc.)
 // ... unchanged code for endpoints ...
 
-// === /automate Endpoint (Advanced Version) ===
+/* === old /automate Endpoint (Advanced Version) ===
 app.post('/automate', requireAuth, async (req, res) => {
   const { url, command } = req.body;
   if (!url || !command) {
@@ -2131,61 +2124,153 @@ app.post('/automate', requireAuth, async (req, res) => {
     }
   }
 });
+*/
 
-// NLI endpoint using advanced automation
-app.post('/nli', requireAuth, async (req, res) => {
-  const { prompt, url } = req.body;
-  if (!prompt) return res.status(400).json({ success: false, error: 'Prompt is required.' });
+// Updated automate route to use NLI
+app.post('/automate', requireAuth, async (req, res) => {
+  const { url, command, type = 'manual' } = req.body;
+  
+  if (!command) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Command is required.' 
+    });
+  }
 
-  let browser;
+  const taskId = new ObjectId();
+  const user = await User.findById(req.session.user);
+  
+  // Create task record
+  user.activeTasks.push({
+    _id: taskId,
+    url,
+    command,
+    status: 'pending',
+    progress: 0,
+    startTime: new Date(),
+    type
+  });
+  
+  await user.save();
+  res.json({ success: true, taskId });
+
   try {
-    logger.info(`[NLI] Starting task: "${prompt}" with URL: ${url || 'about:blank'}`);
-    const requiresAutomation = /web|site|website|https|www|link|\.com/i.test(prompt);
-    const targetUrl = url || 'about:blank';
+    logger.info(`Starting ${type} task: ${command}`);
+    await updateTaskProgress(req.session.user, taskId, 10, { 
+      status: 'processing' 
+    });
 
-    let nliResult;
-    if (requiresAutomation) {
-      browser = await getBrowserWithProtection();
-      const page = await setupEnhancedPage(browser, targetUrl);
-      const agent = new PuppeteerAgent(page, {
-        forceSameTabNavigation: true,
-        executionTimeout: 600000,
-        planningTimeout: 300000,
-      });
-      logger.info("[NLI] Browser opened, executing automation...");
-      nliResult = await runAdvancedAutomation(prompt, page);
-      logger.info("[NLI] Automation complete:", nliResult);
-    } else {
-      nliResult = await runAdvancedAutomation(prompt);
-      logger.info("[NLI] Non-browser task complete:", nliResult);
-    }
-
-    const user = await User.findById(req.session.user);
-    const historyItem = {
-      url: targetUrl,
-      command: prompt,
-      result: { raw: nliResult, aiPrepared: nliResult },
-      timestamp: new Date(),
-    };
-    user.history.push(historyItem);
-    await user.save();
-
-    res.json({ success: true, result: nliResult, history: historyItem });
-  } catch (err) {
-    logger.error("[NLI] Error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  } finally {
-    if (browser) {
-      try {
-        await browser.close();
-        releaseBrowser(browser);
-        logger.info("[NLI] Browser closed");
-      } catch (closeErr) {
-        logger.error("[NLI] Error closing browser:", closeErr);
+    const result = await executeTask(url, command, type);
+    
+    // Store result
+    await User.updateOne(
+      { _id: req.session.user },
+      { 
+        $push: { 
+          history: { 
+            _id: taskId, 
+            url, 
+            command, 
+            result, 
+            type,
+            timestamp: new Date() 
+          } 
+        }
       }
-    }
+    );
+
+    await User.updateOne(
+      { _id: req.session.user },
+      { $pull: { activeTasks: { _id: taskId } } }
+    );
+
+    await updateTaskProgress(req.session.user, taskId, 100, {
+      status: 'completed',
+      endTime: new Date()
+    });
+  } catch (error) {
+    await handleQuarkError(error, req.session.user, taskId);
+    await User.updateOne(
+      { _id: req.session.user },
+      { $pull: { activeTasks: { _id: taskId } } }
+    );
   }
 });
+
+// NLI endpoint using advanced automation: Main Entry
+app.post('/nli', requireAuth, async (req, res) => {
+  const { prompt } = req.body;
+  
+  if (!prompt) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Prompt is required' 
+    });
+  }
+
+  try {
+    const sessionId = req.session.id;
+    const result = await nliRouter.processInput(prompt, sessionId, {
+      userId: req.session.user,
+      screenshot: true
+    });
+
+    // Add to user's history
+    await User.updateOne(
+      { _id: req.session.user },
+      { 
+        $push: { 
+          history: {
+            _id: new ObjectId(),
+            command: prompt,
+            result: result.result,
+            timestamp: new Date()
+          }
+        }
+      }
+    );
+
+    res.json({ 
+      success: true, 
+      result: result.result,
+      sessionState: result.sessionState
+    });
+  } catch (error) {
+    logger.error('NLI processing error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Enhanced task execution with NLI support
+async function executeTask(url, command, type = 'manual') {
+  try {
+    // Use NLI Router for command processing
+    const sessionId = uuidv4(); // Generate temporary session ID
+    const nliResult = await nliRouter.processInput(command, sessionId, {
+      type,
+      url,
+      screenshot: true
+    });
+
+    // Extract execution result
+    const executionResult = nliResult.result;
+
+    // Format result for client
+    return {
+      raw: executionResult.raw || {},
+      aiPrepared: executionResult.aiPrepared || {},
+      runReport: executionResult.runReport,
+      type: executionResult.type,
+      timestamp: new Date()
+    };
+  } catch (error) {
+    logger.error('Task execution error:', error);
+    throw error;
+  }
+}
 
 export default async function automateComplexTask(userId, taskId, url, command) {
   const User = mongoose.model('User');
@@ -2389,14 +2474,28 @@ app.get('/settings.html', (req, res) => {
   fs.existsSync(filePath) ? res.sendFile(filePath) : res.status(404).send('Settings page not found');
 });
 
-// Start the server and graceful shutdown
-const PORT = process.env.PORT || 3400;
-app.listen(PORT, () => {
-  console.log("Server started on http://localhost:" + PORT);
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  logger.info('Shutting down gracefully...');
+  
+  if (nliRouter) {
+    await nliRouter.cleanup();
+    logger.info('NLI Router closed');
+  }
+  
+  if (quarkAgent) {
+    await quarkAgent.close();
+    logger.info('Quark agent closed');
+  }
+  
+  await mongoose.connection.close();
+  logger.info('Mongoose connection closed');
+  
+  process.exit(0);
 });
 
-process.on('SIGINT', async () => {
-  await mongoose.connection.close();
-  console.log('Mongoose connection closed');
-  process.exit(0);
+// Start server
+const PORT = process.env.PORT || 3400;
+app.listen(PORT, () => {
+  logger.info(`Server started on http://localhost:${PORT}`);
 });
